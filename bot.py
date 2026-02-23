@@ -1,164 +1,197 @@
-import asyncio
-import re
 import os
+import re
+import asyncio
 from pyrogram import Client, filters
-from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, ForceReply
-from pymongo import MongoClient
+from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from motor.motor_asyncio import AsyncIOMotorClient
 
-# ================== CONFIG ==================
+# ================= CONFIG =================
 
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 API_ID = int(os.environ.get("API_ID"))
 API_HASH = os.environ.get("API_HASH")
 DATABASE_URI = os.environ.get("DATABASE_URI")
 ADMINS = list(map(int, os.environ.get("ADMINS").split()))
+CHANNELS = os.environ.get("CHANNELS")
+LOG_CHANNEL = int(os.environ.get("LOG_CHANNEL"))
+FORCE_SUB = os.environ.get("FORCE_SUB")
 
-app = Client("RioRenameBot", bot_token=BOT_TOKEN, api_id=API_ID, api_hash=API_HASH)
+# ================ DATABASE =================
 
-mongo = MongoClient(DATABASE_URI)
-db = mongo["RioBot"]
-settings_db = db["settings"]
-rename_db = db["rename"]
+mongo = AsyncIOMotorClient(DATABASE_URI)
+db = mongo["RIO_BOT"]
+settings = db.settings
 
-# ================== DEFAULT SETTINGS ==================
-
-DEFAULT_SETTINGS = {
-    "_id": "main",
+DEFAULT_FEATURES = {
     "rename": True,
-    "pm_search": True,
-    "auto_delete": True,
-    "premium": False,
-    "refer": False,
-    "token": False
+    "spell": True,
+    "pm_search": False,
+    "auto_delete": False,
+    "stream": False,
+    "season_quality": True
 }
 
-async def get_settings():
-    data = settings_db.find_one({"_id": "main"})
+async def get_features():
+    data = await settings.find_one({"_id": "features"})
     if not data:
-        settings_db.insert_one(DEFAULT_SETTINGS)
-        return DEFAULT_SETTINGS
+        await settings.insert_one({"_id": "features", **DEFAULT_FEATURES})
+        return DEFAULT_FEATURES
     return data
 
-# ================== AI SPELL ==================
+# ================ BOT ======================
 
-def smart_spell(text):
-    text = text.lower()
-    text = re.sub(r'[^a-zA-Z0-9 ]', '', text)
-    corrections = {
-        "movvie": "movie",
-        "filim": "film",
-        "hindhi": "hindi",
-        "tamill": "tamil",
-        "telgu": "telugu",
-        "englsih": "english",
-        "seasson": "season",
-        "episod": "episode"
-    }
-    words = text.split()
-    fixed = [corrections.get(word, word) for word in words]
-    return " ".join(fixed)
+app = Client(
+    "RIO-BOT",
+    bot_token=BOT_TOKEN,
+    api_id=API_ID,
+    api_hash=API_HASH
+)
 
-# ================== START ==================
+# ================ FORCE SUB =================
+
+async def force_sub_check(client, user_id):
+    if not FORCE_SUB:
+        return True
+    try:
+        await client.get_chat_member(FORCE_SUB, user_id)
+        return True
+    except:
+        return False
+
+# ================ START =====================
 
 @app.on_message(filters.command("start"))
 async def start(client, message):
-    await message.reply_text(
-        "👋 Welcome To Rio Advanced Rename Bot\n\nSend Any File To Rename."
-    )
-
-# ================== RENAME SYSTEM ==================
-
-@app.on_message(filters.document & filters.private)
-async def rename_handler(client, message):
-
-    settings = await get_settings()
-    if not settings.get("rename"):
-        return
-
-    file = message.document
-    user_id = message.from_user.id
-
-    rename_db.update_one(
-        {"_id": user_id},
-        {"$set": {"file_id": file.file_id, "file_name": file.file_name}},
-        upsert=True
-    )
-
-    await message.reply(
-        f"📂 Current File Name:\n{file.file_name}\n\nSend New Name Without Extension:",
-        reply_markup=ForceReply(selective=True)
-    )
-
-@app.on_message(filters.reply & filters.private)
-async def rename_process(client, message):
-
-    data = rename_db.find_one({"_id": message.from_user.id})
-    if not data:
-        return
-
-    new_name = message.text.strip()
-    old_name = data["file_name"]
-    ext = old_name.split(".")[-1]
-    final_name = f"{new_name}.{ext}"
-
-    sent = await message.reply_document(
-        data["file_id"],
-        file_name=final_name,
-        caption=f"✅ Renamed To: {final_name}"
-    )
-
-    settings = await get_settings()
-    if settings.get("auto_delete"):
-        await asyncio.sleep(60)
-        await sent.delete()
-
-    rename_db.delete_one({"_id": message.from_user.id})
-
-# ================== FEATURE TOGGLE ==================
-
-@app.on_message(filters.command("settings") & filters.user(ADMINS))
-async def settings_panel(client, message):
-
-    settings = await get_settings()
-
-    keyboard = InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton(
-                f"Rename: {'ON' if settings['rename'] else 'OFF'}",
-                callback_data="toggle_rename"
+    ok = await force_sub_check(client, message.from_user.id)
+    if not ok:
+        return await message.reply(
+            f"Join {FORCE_SUB} first.",
+            reply_markup=InlineKeyboardMarkup(
+                [[InlineKeyboardButton("Join Channel", url=f"https://t.me/{FORCE_SUB.replace('@','')}")]]
             )
+        )
+    await message.reply("Welcome to Rio Commercial Bot 🚀")
+
+# ================ ADMIN PANEL ===============
+
+@app.on_message(filters.command("panel") & filters.user(ADMINS))
+async def panel(client, message):
+    feat = await get_features()
+    text = "⚙ Feature Status:\n\n"
+    for k,v in feat.items():
+        text += f"{k} : {'ON' if v else 'OFF'}\n"
+    await message.reply(text)
+
+@app.on_message(filters.command("feature") & filters.user(ADMINS))
+async def toggle_feature(client, message):
+    parts = message.text.split()
+    if len(parts) != 3:
+        return await message.reply("Usage: /feature season_quality on")
+
+    feature = parts[1]
+    state = parts[2].lower()
+
+    data = await get_features()
+    if feature not in data:
+        return await message.reply("Invalid feature")
+
+    data[feature] = True if state == "on" else False
+    await settings.update_one({"_id": "features"}, {"$set": data})
+    await message.reply(f"{feature} turned {state}")
+
+# ================ AI SPELL ==================
+
+def ai_spell(text):
+    corrections = {
+        "movi": "movie",
+        "filim": "film",
+        "hollywod": "hollywood"
+    }
+    for wrong, right in corrections.items():
+        text = re.sub(wrong, right, text, flags=re.IGNORECASE)
+    return text
+
+# ================ SEARCH WITH SEASON/QUALITY ===============
+
+@app.on_message(filters.text & filters.private)
+async def search_handler(client, message):
+    feat = await get_features()
+
+    if not feat["season_quality"]:
+        return
+
+    query = message.text
+
+    if feat["spell"]:
+        query = ai_spell(query)
+
+    buttons = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("Season 1", callback_data=f"season|1|{query}"),
+            InlineKeyboardButton("Season 2", callback_data=f"season|2|{query}")
         ],
         [
-            InlineKeyboardButton(
-                f"Auto Delete: {'ON' if settings['auto_delete'] else 'OFF'}",
-                callback_data="toggle_delete"
-            )
+            InlineKeyboardButton("480p", callback_data=f"quality|480p|{query}"),
+            InlineKeyboardButton("720p", callback_data=f"quality|720p|{query}")
+        ],
+        [
+            InlineKeyboardButton("1080p", callback_data=f"quality|1080p|{query}")
         ]
     ])
 
-    await message.reply("⚙️ Bot Settings:", reply_markup=keyboard)
+    await message.reply(f"Select Season / Quality for:\n{query}", reply_markup=buttons)
 
-@app.on_callback_query()
-async def callbacks(client, callback):
+@app.on_callback_query(filters.regex("season|quality"))
+async def season_quality_callback(client, callback_query):
+    data = callback_query.data.split("|")
+    type_ = data[0]
+    value = data[1]
+    query = data[2]
 
-    settings = await get_settings()
+    await callback_query.message.reply(
+        f"Searching {query}\nSelected {type_}: {value}\n\n(Connect your database search logic here)"
+    )
 
-    if callback.data == "toggle_rename":
-        settings_db.update_one(
-            {"_id": "main"},
-            {"$set": {"rename": not settings["rename"]}}
-        )
+# ================ RENAME ====================
 
-    elif callback.data == "toggle_delete":
-        settings_db.update_one(
-            {"_id": "main"},
-            {"$set": {"auto_delete": not settings["auto_delete"]}}
-        )
+@app.on_message(filters.document)
+async def rename_handler(client, message):
+    feat = await get_features()
+    if not feat["rename"]:
+        return
 
-    await callback.answer("Updated")
-    await callback.message.delete()
+    file = message.document
+    file_name = file.file_name
 
-# ================== RUN ==================
+    buttons = InlineKeyboardMarkup(
+        [[InlineKeyboardButton("Rename Now", callback_data=f"rename|{file.file_id}")]]
+    )
+    await message.reply(f"File: {file_name}", reply_markup=buttons)
 
-print("🔥 Rio Advanced Bot Running...")
+@app.on_callback_query(filters.regex("^rename"))
+async def rename_callback(client, callback_query):
+    await callback_query.message.reply("Send new filename.")
+
+# ================ AUTO DELETE ===============
+
+@app.on_message(filters.private & filters.document)
+async def auto_delete(client, message):
+    feat = await get_features()
+    if feat["auto_delete"]:
+        await asyncio.sleep(60)
+        await message.delete()
+
+# ================ LOGGING ===================
+
+@app.on_message(filters.all)
+async def logger(client, message):
+    if LOG_CHANNEL:
+        try:
+            await message.forward(LOG_CHANNEL)
+        except:
+            pass
+
+# ================ RUN =======================
+
+print("Rio Commercial Bot With Season/Quality Started 🚀")
 app.run()
