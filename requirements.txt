@@ -1,4 +1,5 @@
-pyrogram
-tgcrypto
-motor
-pip install python-dotenv
+python-dotenv
+pyrogram==2.0.0
+pymongo[srv]
+dnspython
+openai
