@@ -82,14 +82,21 @@ async def callback_handler(client, callback_query):
 
     if data.startswith("season6"):
         quality = data.split("_")[1]  # "480p", "720p", "1080p"
-        files = list(db["files"].find({"season": 6, "quality": {"$regex": quality, "$options": "i"}}))
+
+        # 🔹 Search in title for dynamic episode names
+        files = list(db["files"].find({
+            "season": 6,
+            "title": {"$regex": quality, "$options": "i"}
+        }))
+
         if not files:
             await callback_query.message.edit_text("❌ No files found for this season/quality.")
             return
 
         text = f"📁 Season 6 - {quality}\n\nAvailable Episodes:\n"
         for f in files:
-            text += f"Episode {f.get('episode', '-')}: {f.get('title', '-')}\n"
+            text += f"{f.get('title', '-')}\n"
+
         await callback_query.message.edit_text(text)
 
 # ------------------ Admin Panel ------------------
@@ -108,6 +115,7 @@ async def pm_search(client, message):
         await message.reply_text("Please provide a search query.")
         return
 
+    # Search in title only
     results = list(db["files"].find({"title": {"$regex": query, "$options": "i"}}))
     if not results:
         await message.reply_text("❌ No results found.")
@@ -115,7 +123,8 @@ async def pm_search(client, message):
 
     text = f"🔍 Search results for: {query}\n"
     for f in results:
-        text += f"Episode {f.get('episode', '-')}: {f.get('title', '-')}\n"
+        text += f"{f.get('title', '-')}\n"
+
     await message.reply_text(text)
 
 # ------------------ Logging All Messages ------------------
