@@ -1,5 +1,6 @@
 import os
 import logging
+import re
 from dotenv import load_dotenv
 from pyrogram import Client, filters
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
@@ -12,8 +13,8 @@ API_ID = int(os.getenv("API_ID"))
 API_HASH = os.getenv("API_HASH")
 DATABASE_URI = os.getenv("DATABASE_URI")
 ADMINS = [int(i) for i in os.getenv("ADMINS", "").split()]
-AUTH_CHANNEL_ID = int(os.getenv("AUTH_CHANNEL_ID"))  # Numeric
-AUTH_CHANNEL_USERNAME = os.getenv("AUTH_CHANNEL_USERNAME")  # @username
+AUTH_CHANNEL_ID = int(os.getenv("AUTH_CHANNEL_ID"))
+AUTH_CHANNEL_USERNAME = os.getenv("AUTH_CHANNEL_USERNAME")
 CHANNELS = [int(i) for i in os.getenv("CHANNELS", "").split()]
 LOG_CHANNEL = int(os.getenv("LOG_CHANNEL"))
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
@@ -50,13 +51,13 @@ SEASON_BUTTONS = InlineKeyboardMarkup(
     ]
 )
 
-# ------------------ /start Command ------------------
+# ------------------ Start Command ------------------
 @app.on_message(filters.private & filters.command("start"))
 async def start(client, message):
     user_id = message.from_user.id
+    logger.info(f"/start called by {user_id}")
 
-    joined = await check_force_sub(user_id)
-    if not joined:
+    if not await check_force_sub(user_id):
         await message.reply_text(
             "⚠️ You must join the auth channel to use this bot.",
             reply_markup=InlineKeyboardMarkup(
@@ -66,7 +67,7 @@ async def start(client, message):
         return
 
     await message.reply_text(
-        f"👋 Hello {message.from_user.first_name}, Welcome!\n\nSelect season:",
+        f"👋 Hello {message.from_user.first_name}, Welcome to the VJ Filter Bot!\n\nSelect season:",
         reply_markup=SEASON_BUTTONS,
     )
 
@@ -80,29 +81,27 @@ async def callback_handler(client, callback_query):
         await callback_query.answer("⚠️ Please join the auth channel first!", show_alert=True)
         return
 
-    # Dynamic season & quality fetch
-    if data.startswith("season"):
-        parts = data.split("_")
-        season = int(parts[0].replace("season", ""))
-        quality = parts[1]
-
-        files = list(db["files"].find({
-            "season": season,
-            "quality": {"$regex": quality, "$options": "i"}
-        }))
-
+    if data.startswith("season6"):
+        quality = data.split("_")[1]  # "480p", "720p", "1080p"
+        files = list(db["files"].find({"season": 6, "quality": {"$regex": quality, "$options": "i"}}))
         if not files:
             await callback_query.message.edit_text("❌ No files found for this season/quality.")
             return
 
-        text = f"📁 Season {season} - {quality}\n\nAvailable Episodes:\n"
+        text = f"📁 Season 6 - {quality}\n\nAvailable Episodes:\n"
         for f in files:
-            ep_num = f.get("episode", "-")
-            title = f.get("title", "-")
-            text += f"Episode {ep_num}: {title}\n"
+            text += f"Episode {f.get('episode', '-')}: {f.get('title', '-')}\n"
         await callback_query.message.edit_text(text)
 
-# ------------------ /search Command ------------------
+# ------------------ Admin Panel ------------------
+@app.on_message(filters.private & filters.user(ADMINS) & filters.command("admin"))
+async def admin_panel(client, message):
+    text = "🔧 Admin Panel\n\nFeatures:\n"
+    text += "✅ Rename UI + AI Spell\n✅ Feature Toggles\n✅ Custom Stream\n"
+    text += "Use commands to turn features On/Off."
+    await message.reply_text(text)
+
+# ------------------ PM Search ------------------
 @app.on_message(filters.private & filters.command("search"))
 async def pm_search(client, message):
     query = " ".join(message.text.split()[1:])
@@ -117,29 +116,72 @@ async def pm_search(client, message):
 
     text = f"🔍 Search results for: {query}\n"
     for f in results:
-        ep_num = f.get("episode", "-")
-        title = f.get("title", "-")
-        text += f"Episode {ep_num}: {title}\n"
+        text += f"Episode {f.get('episode', '-')}: {f.get('title', '-')}\n"
     await message.reply_text(text)
 
-# ------------------ Admin Panel ------------------
-@app.on_message(filters.private & filters.user(ADMINS) & filters.command("admin"))
-async def admin_panel(client, message):
-    text = "🔧 Admin Panel\n\nFeatures:\n"
-    text += "✅ Rename UI + AI Spell\n✅ Feature Toggles\n✅ Custom Stream\n"
-    text += "Use commands to turn features On/Off."
-    await message.reply_text(text)
+# ------------------ Auto Save Episodes from Channel ------------------
+@app.on_message(filters.channel & filters.video)
+async def save_channel_video(client, message):
+    try:
+        if message.chat.id not in CHANNELS:
+            return
 
-# ------------------ Log All Messages ------------------
+        title = message.video.file_name or "Unknown Title"
+        file_id = message.video.file_id
+
+        # ---------------- Pattern Handling ----------------
+        # S06E44 or Daily Episodes like "Bigg Boss S06E44 Day 43 The Power Key Twist 480p JHS WEB DL"
+        pattern = r"S(\d+)E(\d+).*?(\d{3,4}p)"
+        match = re.search(pattern, title, re.IGNORECASE)
+
+        if match:
+            season = int(match.group(1))
+            episode = int(match.group(2))
+            quality = match.group(3)
+        else:
+            # If pattern not found, save as daily episode with season 6 default
+            season = 6
+            episode = 0
+            quality_search = re.search(r"(\d{3,4}p)", title)
+            quality = quality_search.group(1) if quality_search else "Unknown"
+
+        existing = db["files"].find_one({"chat_id": message.chat.id, "file_id": file_id})
+        if existing:
+            return
+
+        db["files"].insert_one({
+            "chat_id": message.chat.id,
+            "season": season,
+            "episode": episode,
+            "title": title,
+            "quality": quality,
+            "file_id": file_id,
+            "date": message.date
+        })
+
+        logger.info(f"Saved video: S{season}E{episode} - {title}")
+
+        # ---------------- Log Channel Notification ----------------
+        try:
+            await app.send_message(
+                LOG_CHANNEL,
+                f"✅ Saved episode: S{season}E{episode} - {title} ({quality})"
+            )
+        except Exception as e:
+            logger.error(f"LOG ERROR: {e}")
+
+    except Exception as e:
+        logger.error(f"ERROR saving channel video: {e}")
+
+# ------------------ Logging All Messages ------------------
 @app.on_message(filters.all)
 async def log_messages(client, message):
     try:
         user_name = message.from_user.first_name if message.from_user else "Unknown"
         user_id = message.from_user.id if message.from_user else "N/A"
-        msg_text = message.text or message.caption or "No Text"
         await app.send_message(
             LOG_CHANNEL,
-            f"📩 Message from {user_name} ({user_id})\nText: {msg_text}"
+            f"📩 Message from {user_name} ({user_id})\nText: {message.text or 'No Text'}"
         )
     except Exception as e:
         logger.error(f"LOG ERROR: {e}")
