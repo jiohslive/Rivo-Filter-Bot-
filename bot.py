@@ -5,7 +5,7 @@ from pyrogram import Client, filters
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from pymongo import MongoClient
 
-# Load environment variables
+# ---------------- Environment ----------------
 load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 API_ID = int(os.getenv("API_ID"))
@@ -17,29 +17,34 @@ CHANNELS = [int(i) for i in os.getenv("CHANNELS", "").split()]
 LOG_CHANNEL = int(os.getenv("LOG_CHANNEL"))
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
-# Logging
+# ---------------- Logging ----------------
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# MongoDB
+# ---------------- MongoDB ----------------
 mongo = MongoClient(DATABASE_URI)
 db = mongo["vj_filter_bot"]
 
-# Pyrogram client
-app = Client("vj_filter_bot", bot_token=BOT_TOKEN, api_id=API_ID, api_hash=API_HASH)
+# ---------------- Pyrogram Client ----------------
+app = Client(
+    "vj_filter_bot",
+    bot_token=BOT_TOKEN,
+    api_id=API_ID,
+    api_hash=API_HASH
+)
 
-# ----- Helper Functions -----
-def is_admin(user_id):
+# ---------------- Helper Functions ----------------
+def is_admin(user_id: int) -> bool:
     return user_id in ADMINS
 
-def check_force_sub(user_id):
+async def check_force_sub(user_id: int) -> bool:
     try:
-        member = app.get_chat_member(AUTH_CHANNEL, user_id)
+        member = await app.get_chat_member(AUTH_CHANNEL, user_id)
         return member.status != "left"
     except:
         return False
 
-# ----- Inline Buttons -----
+# ---------------- Inline Buttons ----------------
 SEASON_BUTTONS = InlineKeyboardMarkup(
     [
         [InlineKeyboardButton("Season 6 - 480p", callback_data="season6_480")],
@@ -48,11 +53,11 @@ SEASON_BUTTONS = InlineKeyboardMarkup(
     ]
 )
 
-# ----- Command Handlers -----
+# ---------------- Command Handlers ----------------
 @app.on_message(filters.private & filters.command("start"))
 async def start(client, message):
     user_id = message.from_user.id
-    if not check_force_sub(user_id):
+    if not await check_force_sub(user_id):
         await message.reply_text(
             "⚠️ You must join the auth channel to use this bot.",
             reply_markup=InlineKeyboardMarkup(
@@ -65,19 +70,18 @@ async def start(client, message):
         reply_markup=SEASON_BUTTONS,
     )
 
-# ----- Callback Query Handlers -----
+# ---------------- Callback Query Handlers ----------------
 @app.on_callback_query()
 async def callback_handler(client, callback_query):
     user_id = callback_query.from_user.id
     data = callback_query.data
 
-    if not check_force_sub(user_id):
+    if not await check_force_sub(user_id):
         await callback_query.answer("⚠️ Please join the auth channel first!", show_alert=True)
         return
 
     if data.startswith("season6"):
         quality = data.split("_")[1]
-        # Fetch files from CHANNELS collection in DB (example)
         files = db["files"].find({"season": 6, "quality": quality})
         if files.count() == 0:
             await callback_query.message.edit_text("❌ No files found for this season/quality.")
@@ -88,7 +92,7 @@ async def callback_handler(client, callback_query):
             text += f"Episode {f['episode']} - {f['title']}\n"
         await callback_query.message.edit_text(text)
 
-# ----- Admin Panel -----
+# ---------------- Admin Panel ----------------
 @app.on_message(filters.private & filters.user(ADMINS) & filters.command("admin"))
 async def admin_panel(client, message):
     text = "🔧 Admin Panel\n\nFeatures:\n"
@@ -96,7 +100,7 @@ async def admin_panel(client, message):
     text += "Use commands to turn features On/Off."
     await message.reply_text(text)
 
-# ----- PM Search -----
+# ---------------- PM Search ----------------
 @app.on_message(filters.private & filters.command("search"))
 async def pm_search(client, message):
     query = " ".join(message.text.split()[1:])
@@ -105,17 +109,18 @@ async def pm_search(client, message):
         return
     results = db["files"].find({"title": {"$regex": query, "$options": "i"}})
     text = f"🔍 Search results for: {query}\n"
+    found = False
     for f in results:
+        found = True
         text += f"Episode {f['episode']} - {f['title']}\n"
-    await message.reply_text(text or "No results found.")
+    await message.reply_text(text if found else "No results found.")
 
-# ----- Auto Approve Placeholder -----
+# ---------------- Auto Approve Placeholder ----------------
 @app.on_message(filters.channel)
 async def auto_approve(client, message):
-    # Example: auto approve logic here
     pass
 
-# ----- Logging -----
+# ---------------- Logging ----------------
 @app.on_message(filters.all)
 async def log_messages(client, message):
     try:
@@ -123,5 +128,18 @@ async def log_messages(client, message):
     except Exception as e:
         logger.error(e)
 
-# ----- Run Bot -----
-app.run()
+# ---------------- Run Bot ----------------
+if __name__ == "__main__":
+    import asyncio
+    import pyrogram
+    try:
+        # Sync time with Telegram server to avoid BadMsgNotification
+        async def main():
+            async with app:
+                logger.info("Bot Started Successfully!")
+                await asyncio.Event().wait()  # keep running
+
+        asyncio.run(main())
+
+    except KeyboardInterrupt:
+        logger.info("Bot stopped manually.")
