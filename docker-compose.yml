@@ -1,0 +1,9 @@
+version: '3.9'
+
+services:
+  vj_bot:
+    build: .
+    container_name: vj_filter_bot
+    restart: unless-stopped
+    env_file:
+      - .env
