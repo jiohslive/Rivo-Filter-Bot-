@@ -13,7 +13,7 @@ API_HASH = os.getenv("API_HASH")
 DATABASE_URI = os.getenv("DATABASE_URI")
 ADMINS = [int(i) for i in os.getenv("ADMINS", "").split()]
 AUTH_CHANNEL_ID = int(os.getenv("AUTH_CHANNEL_ID"))  # Numeric ID
-AUTH_CHANNEL_USERNAME = os.getenv("AUTH_CHANNEL_USERNAME")  # @username for join link
+AUTH_CHANNEL_USERNAME = os.getenv("AUTH_CHANNEL_USERNAME")  # @username
 CHANNELS = [int(i) for i in os.getenv("CHANNELS", "").split()]
 LOG_CHANNEL = int(os.getenv("LOG_CHANNEL"))
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
@@ -33,9 +33,9 @@ app = Client("vj_filter_bot", bot_token=BOT_TOKEN, api_id=API_ID, api_hash=API_H
 def is_admin(user_id):
     return user_id in ADMINS
 
-def check_force_sub(user_id):
+async def check_force_sub(user_id):
     try:
-        member = app.get_chat_member(AUTH_CHANNEL_ID, user_id)
+        member = await app.get_chat_member(AUTH_CHANNEL_ID, user_id)
         return member.status != "left"
     except Exception as e:
         logger.warning(f"Force sub check failed: {e}")
@@ -56,7 +56,7 @@ async def start(client, message):
     user_id = message.from_user.id
     logger.info(f"/start called by {user_id}")
 
-    if not check_force_sub(user_id):
+    if not await check_force_sub(user_id):
         await message.reply_text(
             "⚠️ You must join the auth channel to use this bot.",
             reply_markup=InlineKeyboardMarkup(
@@ -76,7 +76,7 @@ async def callback_handler(client, callback_query):
     user_id = callback_query.from_user.id
     data = callback_query.data
 
-    if not check_force_sub(user_id):
+    if not await check_force_sub(user_id):
         await callback_query.answer("⚠️ Please join the auth channel first!", show_alert=True)
         return
 
@@ -120,7 +120,7 @@ async def pm_search(client, message):
 # ------------------ Auto Approve Placeholder ------------------
 @app.on_message(filters.channel)
 async def auto_approve(client, message):
-    pass  # Add auto approve logic if needed
+    pass
 
 # ------------------ Logging All Messages ------------------
 @app.on_message(filters.all)
