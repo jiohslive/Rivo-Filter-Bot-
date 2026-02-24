@@ -12,8 +12,8 @@ API_ID = int(os.getenv("API_ID"))
 API_HASH = os.getenv("API_HASH")
 DATABASE_URI = os.getenv("DATABASE_URI")
 ADMINS = [int(i) for i in os.getenv("ADMINS", "").split()]
-AUTH_CHANNEL_ID = int(os.getenv("AUTH_CHANNEL_ID"))
-AUTH_CHANNEL_USERNAME = os.getenv("AUTH_CHANNEL_USERNAME")
+AUTH_CHANNEL_ID = int(os.getenv("AUTH_CHANNEL_ID"))  # Numeric
+AUTH_CHANNEL_USERNAME = os.getenv("AUTH_CHANNEL_USERNAME")  # @username
 CHANNELS = [int(i) for i in os.getenv("CHANNELS", "").split()]
 LOG_CHANNEL = int(os.getenv("LOG_CHANNEL"))
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
@@ -50,13 +50,13 @@ SEASON_BUTTONS = InlineKeyboardMarkup(
     ]
 )
 
-# ------------------ Command Handlers ------------------
+# ------------------ /start Command ------------------
 @app.on_message(filters.private & filters.command("start"))
 async def start(client, message):
     user_id = message.from_user.id
-    logger.info(f"/start called by {user_id}")
 
-    if not await check_force_sub(user_id):
+    joined = await check_force_sub(user_id)
+    if not joined:
         await message.reply_text(
             "⚠️ You must join the auth channel to use this bot.",
             reply_markup=InlineKeyboardMarkup(
@@ -66,7 +66,7 @@ async def start(client, message):
         return
 
     await message.reply_text(
-        f"👋 Hello {message.from_user.first_name}, Welcome to the VJ Filter Bot!\n\nSelect season:",
+        f"👋 Hello {message.from_user.first_name}, Welcome!\n\nSelect season:",
         reply_markup=SEASON_BUTTONS,
     )
 
@@ -80,24 +80,47 @@ async def callback_handler(client, callback_query):
         await callback_query.answer("⚠️ Please join the auth channel first!", show_alert=True)
         return
 
-    if data.startswith("season6"):
-        quality = data.split("_")[1]  # "480p", "720p", "1080p"
+    # Dynamic season & quality fetch
+    if data.startswith("season"):
+        parts = data.split("_")
+        season = int(parts[0].replace("season", ""))
+        quality = parts[1]
 
-        # 🔹 Search in title for dynamic episode names
         files = list(db["files"].find({
-            "season": 6,
-            "title": {"$regex": quality, "$options": "i"}
+            "season": season,
+            "quality": {"$regex": quality, "$options": "i"}
         }))
 
         if not files:
             await callback_query.message.edit_text("❌ No files found for this season/quality.")
             return
 
-        text = f"📁 Season 6 - {quality}\n\nAvailable Episodes:\n"
+        text = f"📁 Season {season} - {quality}\n\nAvailable Episodes:\n"
         for f in files:
-            text += f"{f.get('title', '-')}\n"
-
+            ep_num = f.get("episode", "-")
+            title = f.get("title", "-")
+            text += f"Episode {ep_num}: {title}\n"
         await callback_query.message.edit_text(text)
+
+# ------------------ /search Command ------------------
+@app.on_message(filters.private & filters.command("search"))
+async def pm_search(client, message):
+    query = " ".join(message.text.split()[1:])
+    if not query:
+        await message.reply_text("Please provide a search query.")
+        return
+
+    results = list(db["files"].find({"title": {"$regex": query, "$options": "i"}}))
+    if not results:
+        await message.reply_text("❌ No results found.")
+        return
+
+    text = f"🔍 Search results for: {query}\n"
+    for f in results:
+        ep_num = f.get("episode", "-")
+        title = f.get("title", "-")
+        text += f"Episode {ep_num}: {title}\n"
+    await message.reply_text(text)
 
 # ------------------ Admin Panel ------------------
 @app.on_message(filters.private & filters.user(ADMINS) & filters.command("admin"))
@@ -107,35 +130,16 @@ async def admin_panel(client, message):
     text += "Use commands to turn features On/Off."
     await message.reply_text(text)
 
-# ------------------ PM Search ------------------
-@app.on_message(filters.private & filters.command("search"))
-async def pm_search(client, message):
-    query = " ".join(message.text.split()[1:])
-    if not query:
-        await message.reply_text("Please provide a search query.")
-        return
-
-    # Search in title only
-    results = list(db["files"].find({"title": {"$regex": query, "$options": "i"}}))
-    if not results:
-        await message.reply_text("❌ No results found.")
-        return
-
-    text = f"🔍 Search results for: {query}\n"
-    for f in results:
-        text += f"{f.get('title', '-')}\n"
-
-    await message.reply_text(text)
-
-# ------------------ Logging All Messages ------------------
+# ------------------ Log All Messages ------------------
 @app.on_message(filters.all)
 async def log_messages(client, message):
     try:
         user_name = message.from_user.first_name if message.from_user else "Unknown"
         user_id = message.from_user.id if message.from_user else "N/A"
+        msg_text = message.text or message.caption or "No Text"
         await app.send_message(
             LOG_CHANNEL,
-            f"📩 Message from {user_name} ({user_id})\nText: {message.text or 'No Text'}"
+            f"📩 Message from {user_name} ({user_id})\nText: {msg_text}"
         )
     except Exception as e:
         logger.error(f"LOG ERROR: {e}")
