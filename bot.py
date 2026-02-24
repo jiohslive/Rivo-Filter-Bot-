@@ -12,8 +12,8 @@ API_ID = int(os.getenv("API_ID"))
 API_HASH = os.getenv("API_HASH")
 DATABASE_URI = os.getenv("DATABASE_URI")
 ADMINS = [int(i) for i in os.getenv("ADMINS", "").split()]
-AUTH_CHANNEL_ID = int(os.getenv("AUTH_CHANNEL_ID"))  # Numeric ID
-AUTH_CHANNEL_USERNAME = os.getenv("AUTH_CHANNEL_USERNAME")  # @username
+AUTH_CHANNEL_ID = int(os.getenv("AUTH_CHANNEL_ID"))
+AUTH_CHANNEL_USERNAME = os.getenv("AUTH_CHANNEL_USERNAME")
 CHANNELS = [int(i) for i in os.getenv("CHANNELS", "").split()]
 LOG_CHANNEL = int(os.getenv("LOG_CHANNEL"))
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
@@ -44,9 +44,9 @@ async def check_force_sub(user_id):
 # ------------------ Inline Buttons ------------------
 SEASON_BUTTONS = InlineKeyboardMarkup(
     [
-        [InlineKeyboardButton("Season 6 - 480p", callback_data="season6_480")],
-        [InlineKeyboardButton("Season 6 - 720p", callback_data="season6_720")],
-        [InlineKeyboardButton("Season 6 - 1080p", callback_data="season6_1080")],
+        [InlineKeyboardButton("Season 6 - 480p", callback_data="season6_480p")],
+        [InlineKeyboardButton("Season 6 - 720p", callback_data="season6_720p")],
+        [InlineKeyboardButton("Season 6 - 1080p", callback_data="season6_1080p")],
     ]
 )
 
@@ -81,9 +81,9 @@ async def callback_handler(client, callback_query):
         return
 
     if data.startswith("season6"):
-        quality = data.split("_")[1]
-        files = list(db["files"].find({"season": 6, "quality": quality}))
-        if len(files) == 0:
+        quality = data.split("_")[1]  # "480p", "720p", "1080p"
+        files = list(db["files"].find({"season": 6, "quality": {"$regex": quality, "$options": "i"}}))
+        if not files:
             await callback_query.message.edit_text("❌ No files found for this season/quality.")
             return
 
@@ -107,6 +107,7 @@ async def pm_search(client, message):
     if not query:
         await message.reply_text("Please provide a search query.")
         return
+
     results = list(db["files"].find({"title": {"$regex": query, "$options": "i"}}))
     if not results:
         await message.reply_text("❌ No results found.")
@@ -117,18 +118,18 @@ async def pm_search(client, message):
         text += f"Episode {f.get('episode', '-')}: {f.get('title', '-')}\n"
     await message.reply_text(text)
 
-# ------------------ Auto Approve Placeholder ------------------
-@app.on_message(filters.channel)
-async def auto_approve(client, message):
-    pass
-
 # ------------------ Logging All Messages ------------------
 @app.on_message(filters.all)
 async def log_messages(client, message):
     try:
-        await app.send_message(LOG_CHANNEL, f"📩 Message from {message.from_user.first_name} ({message.from_user.id})")
+        user_name = message.from_user.first_name if message.from_user else "Unknown"
+        user_id = message.from_user.id if message.from_user else "N/A"
+        await app.send_message(
+            LOG_CHANNEL,
+            f"📩 Message from {user_name} ({user_id})\nText: {message.text or 'No Text'}"
+        )
     except Exception as e:
-        logger.error(e)
+        logger.error(f"LOG ERROR: {e}")
 
 # ------------------ Run Bot ------------------
 if __name__ == "__main__":
